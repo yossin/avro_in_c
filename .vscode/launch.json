@@ -10,7 +10,7 @@
             "name": "rdkafka",
             "type": "cppdbg",
             "request": "launch",
-            "program": "/workspaces/avro_in_c/build/src/avro-person/avro-person",
+            "program": "${workspaceFolder}/build/src/avro-person/avro-person",
             "args": ["1"],
             "stopAtEntry": true,
             "cwd": "${workspaceFolder}",
