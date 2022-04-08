@@ -6,7 +6,7 @@ project('cpp_pocs', 'cpp',
 
 #dpdk = subproject('dpdk')
 
-subdir('src/mempool')
+subdir('src/utils')
 subdir('src/avro-person')
 subdir('src/kafka-producer')
 
