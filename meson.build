@@ -8,6 +8,5 @@ project('cpp_pocs', 'cpp',
 
 subdir('src/mempool')
 subdir('src/avro-person')
-#subdir('src/myexe')
+subdir('src/kafka-producer')
 
-#mylib_dep = p.dependency('mylib')
