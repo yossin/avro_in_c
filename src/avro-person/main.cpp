@@ -168,6 +168,7 @@ int main(int argc, char **argv) {
                 max_messages=strtoul(argv[1],NULL, 10);
         }
 
+        
 
 
         init_schema(person_schema);
