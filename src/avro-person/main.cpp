@@ -5,6 +5,7 @@
 #include <chrono>
 #include <signal.h>
 #include <limits.h>
+#include "DpdkContext.hpp"
 
 #define Q(x) #x
 #define QUOTE(x) Q(x)
@@ -159,6 +160,8 @@ int generic_loop(int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t&, const
 
 
 int main(int argc, char **argv) {
+        const auto c = DpdkContext::instance();
+
         int64_t id = 0;
         avro_schema_t person_schema;
         /* Signal handler for clean shutdown */

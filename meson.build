@@ -4,7 +4,9 @@ project('cpp_pocs', 'cpp',
 
 
 
-#dpdk = subproject('dpdk')
+dpdk = subproject('dpdk')
+dpdk_dep = dpdk.get_variable('dpdk_libraries')
+
 
 subdir('src/utils')
 subdir('src/avro-person')
