@@ -17,12 +17,13 @@ struct dpdk_settings_s{
     int channels;
     int socket_mem;
     bool use_hugepages;
+    bool primary;
 };
 
 
  const int def_cores[] ={1,2};
 typedef dpdk_settings_s dpdk_settings_t;
-dpdk_settings_t default_dpdk_settings = {.cores={1,2}, .channels=4, .socket_mem=2048, .use_hugepages=false};
+dpdk_settings_t default_dpdk_settings = {.cores={1,2}, .channels=4, .socket_mem=2048, .use_hugepages=false, .primary=true};
 
 
 
@@ -30,12 +31,12 @@ class DpdkContext final {
     private:
         char **argv;
         int argc;
-        DpdkContext(dpdk_settings_t settings) { 
+        DpdkContext(dpdk_settings_t settings):dpdk_settings(settings) { 
             std::stringstream core_stream;
             for (int c: settings.cores){
                 core_stream <<  "," << c;
             }
-            argc=settings.use_hugepages?6:5;
+            argc=settings.use_hugepages?8:7;
             argv = new char*[argc];
             for (int i=0; i<argc; i++){
                 argv[i] = new char[500];
@@ -47,9 +48,13 @@ class DpdkContext final {
             
             if (!settings.use_hugepages){
                 strcpy(argv[4], "--no-huge");
+                strcpy(argv[5], "--proc-type");
+                strcpy(argv[6], settings.primary?"primary":"secondary");
             } else {
                 strcpy(argv[4], "--socket-mem");
                 strcpy(argv[5], std::to_string(settings.socket_mem).c_str());
+                strcpy(argv[6], "--proc-type");
+                strcpy(argv[7], settings.primary?"primary":"secondary");
             }
         
 
@@ -65,6 +70,7 @@ class DpdkContext final {
             rte_srand (0);
         }
 public:
+    const dpdk_settings_t dpdk_settings;
 
     ~DpdkContext() {  
         int ret = rte_eal_cleanup();
@@ -79,4 +85,5 @@ public:
         static const std::unique_ptr<DpdkContext> instance{new DpdkContext{settings}};
         return *instance;
     }
+
 };

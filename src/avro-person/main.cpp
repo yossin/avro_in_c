@@ -8,28 +8,15 @@
 #include "DpdkContext.hpp"
 #include "mymempool.hpp"
 #include <rte_ring.h>
+#include "common.hpp"
 
-
-#define Q(x) #x
-#define QUOTE(x) Q(x)
-
-#define MESSAGE_SIZE 500
-#define KEY_SIZE 100
-//10000, 20000, 163840
-#define BATCH_SIZE 16384
 #define RD_MAX_BUFFERED_MESSAGES 100000
 #define RD_MAX_BUFFERED_MS 100
 
-#define BUFFER_SIZE 1024
 
 static volatile sig_atomic_t run = 1;
 static unsigned long max_messages=ULONG_MAX;
 
-typedef struct stats_t{
-        unsigned long delivered;
-        unsigned long ring_errors;
-        unsigned long pool_errors;
-} stats_s;
 
 
 /**
@@ -83,7 +70,7 @@ int add_person(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t id,
 
         size_t size=0;
         assert(avro_value_sizeof(&person, &size) ==0);
-        if (size > BUFFER_SIZE){
+        if (size > MESSAGE_SIZE){
                 return -size;
         }
         int res = avro_value_write(writer, &person);
@@ -132,7 +119,7 @@ int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *c
 
         size_t size=0;
         assert(avro_value_sizeof(&person, &size) ==0);
-        if (size > BUFFER_SIZE){
+        if (size > MESSAGE_SIZE){
                 return -size;
         }
         int res = avro_value_write(writer, &person);
@@ -149,7 +136,7 @@ int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *c
 
 
 
-int generic_loop(mempool<MESSAGE_SIZE,KEY_SIZE> *pool, rte_ring* ring, int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t, const char *, const char *, const char *, int32_t),
+int generic_loop(const mtime &start_time, mempool_s *pool, rte_ring* ring, int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t, const char *, const char *, const char *, int32_t),
         avro_value_iface_t  *person_class, int64_t &id, stats_s &stats, 
         const char *first, const char *last, const char *phone, int32_t &age){
         
@@ -157,24 +144,30 @@ int generic_loop(mempool<MESSAGE_SIZE,KEY_SIZE> *pool, rte_ring* ring, int (*add
         int last_size=0;
         while(run && stats.delivered<max_messages) {
                 // get a pool element and serialize avro mesage into it
-                struct mempool_element<MESSAGE_SIZE,KEY_SIZE> *elem= pool->get();
+                mempool_element_s *elem= pool->get();
                 while (elem==NULL){
                         elem= pool->get();
                         stats.pool_errors++;
                 }
-                avro_writer_t writer = avro_writer_memory(elem->buffer, BUFFER_SIZE);
+                avro_writer_t writer = avro_writer_memory(elem->buffer, MESSAGE_SIZE);
                 last_size=elem->buffer_len = add(writer, person_class, id, first, last, phone, age);
                 memcpy(elem->key, &id, sizeof(id));
                 elem->key_len=sizeof(id);
                 avro_writer_flush(writer);
                 avro_writer_free(writer);
                 id++;
-                stats.delivered++;
+                stats.processed++;
+                stats.processed_bytes+=last_size;
                 // enqueue, on failure put back the element into the pool
                 if (rte_ring_enqueue(ring, elem)){ 
                         pool->put(elem);
                         stats.ring_errors++;
+                } else {
+                        stats.delivered++;
+                        stats.delivered_bytes+=last_size;
+
                 }
+                print_stat(start_time, "AVRO", stats);
         }
         return last_size;
 
@@ -185,33 +178,13 @@ int generic_loop(mempool<MESSAGE_SIZE,KEY_SIZE> *pool, rte_ring* ring, int (*add
 int main(int argc, char **argv) {
         const auto c = DpdkContext::instance();
         
-        mempool<MESSAGE_SIZE,KEY_SIZE> *pool = NULL;
+        mempool_s *pool = NULL;
         stats_s stats;
-        memset(&stats,0, sizeof(stats_s));
-        
-        // create a ring for transferring data between processes
-        rte_ring *ring = rte_ring_lookup("my_ring");
-        if (ring == NULL)
-                ring = rte_ring_create("my_ring",16384,0, RING_F_MC_HTS_DEQ | RING_F_MP_HTS_ENQ);
-        assert (ring!=NULL);
+        rte_ring *ring = NULL;
 
-        // share my mempool
-        rte_ring *pring = rte_ring_lookup("my_pool_ring");
-        if (pring == NULL){
-                pring = rte_ring_create("my_pool_ring",1,0, RING_F_MC_HTS_DEQ | RING_F_MP_HTS_ENQ);
-                pool = new mempool<MESSAGE_SIZE,KEY_SIZE>(1000000);
-                rte_ring_enqueue(pring, pool);
-        } else {
-                while (pool==NULL){
-                    rte_ring_dequeue(pring, (void**)&pool);    
-                }
-                rte_ring_enqueue(pring, pool);
-        }
-        
+        app_init(&pool, stats, &ring, c.dpdk_settings.primary);
 
 
-        assert (ring!=NULL);
-        assert (pool!=NULL);
 
 
         int64_t id = 0;
@@ -222,9 +195,6 @@ int main(int argc, char **argv) {
         max_messages=(argc==2)?strtoul(argv[1],NULL, 10):ULONG_MAX;
         
 
-        
-
-
         init_schema(person_schema);
         avro_value_iface_t  *person_class = avro_generic_class_from_schema(person_schema);
 
@@ -232,31 +202,20 @@ int main(int argc, char **argv) {
         const char *last="last name blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa blaa";
         const char *phone="1234567890";
         int32_t age=100;
-        int size=0;
 
         fprintf(stderr, "%% Press Ctrl-C or Ctrl-D to exit \nor wait till %lu messages will be delivered\n", max_messages);
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // use: add_person OR add_person_with_wrapped_values
-        size=generic_loop(pool, ring, add_person_with_wrapped_values, 
+        generic_loop(start_time, pool, ring, add_person_with_wrapped_values, 
                 person_class, id, stats, first, last, phone, age);
 
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed = end_time - start_time;
-        long time_spent = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-        fprintf(stderr, "wrote  %lu essages in %ld sec. msg/sec %f, pool errors %lu, ring errors %lu\n",
-                         stats.delivered, time_spent, ((double)stats.delivered)/((double)time_spent),
-                         stats.pool_errors, stats.ring_errors);
-
-        fprintf(stderr, "last rote person size is %d\n", size);
+        print_stat(start_time, "AVRO", stats);
 
         /* Decrement all our references to prevent memory from leaking */
 	avro_schema_decref(person_schema);
         avro_value_iface_decref(person_class);
 
-        rte_ring_free(ring);
-        rte_ring_free(pring);
-
-
+        app_free(&pool, c.dpdk_settings.primary);
 }

@@ -1,4 +1,4 @@
-common = library('common', sources : ['mymempool.hpp', 'DpdkContext.hpp'],
+common = library('common', sources : ['mymempool.hpp', 'DpdkContext.hpp', 'common.hpp'],
                 dependencies : [])
 
 
