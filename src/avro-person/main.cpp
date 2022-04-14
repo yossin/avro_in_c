@@ -6,11 +6,15 @@
 #include <signal.h>
 #include <limits.h>
 #include "DpdkContext.hpp"
+#include "mymempool.hpp"
+#include <rte_ring.h>
+
 
 #define Q(x) #x
 #define QUOTE(x) Q(x)
 
 #define MESSAGE_SIZE 500
+#define KEY_SIZE 100
 //10000, 20000, 163840
 #define BATCH_SIZE 16384
 #define RD_MAX_BUFFERED_MESSAGES 100000
@@ -21,6 +25,11 @@
 static volatile sig_atomic_t run = 1;
 static unsigned long max_messages=ULONG_MAX;
 
+typedef struct stats_t{
+        unsigned long delivered;
+        unsigned long ring_errors;
+        unsigned long pool_errors;
+} stats_s;
 
 
 /**
@@ -49,7 +58,7 @@ void init_schema(avro_schema_t &person_schema) {
 
 
 /* Create a value to match the person schema and save it */
-int add_person(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t &id, 
+int add_person(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t id, 
         const char *first, const char *last, const char *phone, int32_t age) {
 
         avro_value_t  person;
@@ -57,7 +66,7 @@ int add_person(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t &id,
         avro_value_t field;
 
         avro_value_get_by_name(&person, "ID", &field, NULL);
-        avro_value_set_long(&field, ++id);
+        avro_value_set_long(&field, id);
 
         avro_value_get_by_name(&person, "First", &field, NULL);
         avro_value_set_string(&field, first);
@@ -91,7 +100,7 @@ int add_person(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t &id,
 
 
 /* Create a value to match the person schema and save it */
-int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t &id, 
+int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *clazz, int64_t id, 
         const char *first, const char *last, const char *phone, int32_t age) {
 
         
@@ -103,7 +112,7 @@ int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *c
 
 
         avro_value_get_by_name(&person, "ID", &field, NULL);
-        avro_value_set_long(&field, ++id);
+        avro_value_set_long(&field, id);
         
         avro_value_get_by_name(&person, "First", &field, NULL);
         avro_wrapped_buffer_new_string(&wfield, first);
@@ -140,20 +149,34 @@ int add_person_with_wrapped_values(avro_writer_t &writer, avro_value_iface_t  *c
 
 
 
-int generic_loop(int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t&, const char *, const char *, const char *, int32_t),
-        avro_value_iface_t  *person_class, int64_t &id, unsigned long &num, 
+int generic_loop(mempool<MESSAGE_SIZE,KEY_SIZE> *pool, rte_ring* ring, int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t, const char *, const char *, const char *, int32_t),
+        avro_value_iface_t  *person_class, int64_t &id, stats_s &stats, 
         const char *first, const char *last, const char *phone, int32_t &age){
         
-        char buffer[BUFFER_SIZE];
-        int size=0; 
-        while(run && num<max_messages) {
-                avro_writer_t writer = avro_writer_memory(buffer, BUFFER_SIZE);
-                size= add(writer, person_class, id, first, last, phone, age);
+        
+        int last_size=0;
+        while(run && stats.delivered<max_messages) {
+                // get a pool element and serialize avro mesage into it
+                struct mempool_element<MESSAGE_SIZE,KEY_SIZE> *elem= pool->get();
+                while (elem==NULL){
+                        elem= pool->get();
+                        stats.pool_errors++;
+                }
+                avro_writer_t writer = avro_writer_memory(elem->buffer, BUFFER_SIZE);
+                last_size=elem->buffer_len = add(writer, person_class, id, first, last, phone, age);
+                memcpy(elem->key, &id, sizeof(id));
+                elem->key_len=sizeof(id);
                 avro_writer_flush(writer);
                 avro_writer_free(writer);
-                num++;
+                id++;
+                stats.delivered++;
+                // enqueue, on failure put back the element into the pool
+                if (rte_ring_enqueue(ring, elem)){ 
+                        pool->put(elem);
+                        stats.ring_errors++;
+                }
         }
-        return size;
+        return last_size;
 
 }
 
@@ -161,15 +184,43 @@ int generic_loop(int (*add)(avro_writer_t&, avro_value_iface_t*, int64_t&, const
 
 int main(int argc, char **argv) {
         const auto c = DpdkContext::instance();
+        
+        mempool<MESSAGE_SIZE,KEY_SIZE> *pool = NULL;
+        stats_s stats;
+        memset(&stats,0, sizeof(stats_s));
+        
+        // create a ring for transferring data between processes
+        rte_ring *ring = rte_ring_lookup("my_ring");
+        if (ring == NULL)
+                ring = rte_ring_create("my_ring",16384,0, RING_F_MC_HTS_DEQ | RING_F_MP_HTS_ENQ);
+        assert (ring!=NULL);
+
+        // share my mempool
+        rte_ring *pring = rte_ring_lookup("my_pool_ring");
+        if (pring == NULL){
+                pring = rte_ring_create("my_pool_ring",1,0, RING_F_MC_HTS_DEQ | RING_F_MP_HTS_ENQ);
+                pool = new mempool<MESSAGE_SIZE,KEY_SIZE>(1000000);
+                rte_ring_enqueue(pring, pool);
+        } else {
+                while (pool==NULL){
+                    rte_ring_dequeue(pring, (void**)&pool);    
+                }
+                rte_ring_enqueue(pring, pool);
+        }
+        
+
+
+        assert (ring!=NULL);
+        assert (pool!=NULL);
+
 
         int64_t id = 0;
         avro_schema_t person_schema;
         /* Signal handler for clean shutdown */
         signal(SIGINT, stop);
 
-        if (argc==2){
-                max_messages=strtoul(argv[1],NULL, 10);
-        }
+        max_messages=(argc==2)?strtoul(argv[1],NULL, 10):ULONG_MAX;
+        
 
         
 
@@ -183,26 +234,29 @@ int main(int argc, char **argv) {
         int32_t age=100;
         int size=0;
 
-        fprintf(stderr, "%% Press Ctrl-C or Ctrl-D to exit\n");
+        fprintf(stderr, "%% Press Ctrl-C or Ctrl-D to exit \nor wait till %lu messages will be delivered\n", max_messages);
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
-        unsigned long num=0;
         // use: add_person OR add_person_with_wrapped_values
-        size=generic_loop(add_person_with_wrapped_values, 
-                person_class, id, num, first, last, phone, age);
+        size=generic_loop(pool, ring, add_person_with_wrapped_values, 
+                person_class, id, stats, first, last, phone, age);
 
         auto end_time = std::chrono::high_resolution_clock::now();
         auto elapsed = end_time - start_time;
         long time_spent = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-        fprintf(stderr, "wrote  %lu essages in %ld sec. msg/sec %f\n",
-                         num, time_spent, ((double)num)/((double)time_spent));
+        fprintf(stderr, "wrote  %lu essages in %ld sec. msg/sec %f, pool errors %lu, ring errors %lu\n",
+                         stats.delivered, time_spent, ((double)stats.delivered)/((double)time_spent),
+                         stats.pool_errors, stats.ring_errors);
 
-        fprintf(stderr, "wrote person. its size is %d\n", size);
+        fprintf(stderr, "last rote person size is %d\n", size);
 
         /* Decrement all our references to prevent memory from leaking */
 	avro_schema_decref(person_schema);
         avro_value_iface_decref(person_class);
+
+        rte_ring_free(ring);
+        rte_ring_free(pring);
 
 
 }

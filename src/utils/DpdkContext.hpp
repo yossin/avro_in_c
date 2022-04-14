@@ -41,7 +41,7 @@ class DpdkContext final {
                 argv[i] = new char[500];
             }
             strcpy(argv[0], "-l");
-            strncpy(argv[1], core_stream.str().c_str(), core_stream.str().length());
+            strcpy(argv[1], &core_stream.str().c_str()[1]);
             strcpy(argv[2], "-n");
             strcpy(argv[3], std::to_string(settings.channels).c_str());
             

@@ -17,7 +17,7 @@ struct mempool_element{
 template< std::size_t N, unsigned K >
 class mempool{
   private:
-    unsigned size;
+    size_t size;
     struct mempool_element<N, K>** arr;
     std::list<struct mempool_element<N,K>*> refs;
     unsigned long next_read=0;
@@ -28,10 +28,10 @@ class mempool{
     mempool(const mempool &);
     mempool& operator=(const mempool &);
   public:
-    mempool(unsigned pool_size=102400):size(pool_size){
+    mempool(size_t pool_size=102400):size(pool_size){
       arr = new struct mempool_element<N,K>*[size];
       assert(arr);
-      for (int i=0;i<size;i++){
+      for (size_t i=0;i<size;i++){
         arr[i] = new struct mempool_element<N,K>();
         refs.push_back(arr[i]);
       }
