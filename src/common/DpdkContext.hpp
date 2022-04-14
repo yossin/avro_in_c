@@ -10,7 +10,7 @@
 #include <rte_random.h>
 #include <memory>
 #include <sstream>
-
+#include <rte_memzone.h>
 
 struct dpdk_settings_s{
     std::set<int> cores;
@@ -36,7 +36,7 @@ class DpdkContext final {
             for (int c: settings.cores){
                 core_stream <<  "," << c;
             }
-            argc=settings.use_hugepages?8:7;
+            argc=settings.use_hugepages?10:9;
             argv = new char*[argc];
             for (int i=0; i<argc; i++){
                 argv[i] = new char[500];
@@ -50,11 +50,16 @@ class DpdkContext final {
                 strcpy(argv[4], "--no-huge");
                 strcpy(argv[5], "--proc-type");
                 strcpy(argv[6], settings.primary?"primary":"secondary");
+                strcpy(argv[7], "--base-virtaddr");
+                strcpy(argv[8], "0x100000000");
+
             } else {
                 strcpy(argv[4], "--socket-mem");
                 strcpy(argv[5], std::to_string(settings.socket_mem).c_str());
                 strcpy(argv[6], "--proc-type");
                 strcpy(argv[7], settings.primary?"primary":"secondary");
+                strcpy(argv[8], "--base-virtaddr");
+                strcpy(argv[9], "0x100000000");
             }
         
 

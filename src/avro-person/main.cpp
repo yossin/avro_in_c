@@ -16,6 +16,7 @@
 
 static volatile sig_atomic_t run = 1;
 static unsigned long max_messages=ULONG_MAX;
+static mtime global_start_time;
 
 
 
@@ -174,9 +175,12 @@ int generic_loop(const mtime &start_time, mempool_s *pool, rte_ring* ring, int (
 }
 
 
-
 int main(int argc, char **argv) {
-        const auto c = DpdkContext::instance();
+        dpdk_settings_t settings=default_dpdk_settings;
+        settings.cores={0};
+        settings.primary=true;
+
+        const auto c = DpdkContext::instance(settings);
         
         mempool_s *pool = NULL;
         stats_s stats;
@@ -206,7 +210,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%% Press Ctrl-C or Ctrl-D to exit \nor wait till %lu messages will be delivered\n", max_messages);
 
         auto start_time = std::chrono::high_resolution_clock::now();
-
+        global_start_time = start_time;
         // use: add_person OR add_person_with_wrapped_values
         generic_loop(start_time, pool, ring, add_person_with_wrapped_values, 
                 person_class, id, stats, first, last, phone, age);

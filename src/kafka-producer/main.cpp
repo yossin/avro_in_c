@@ -9,15 +9,9 @@
 #include "mymempool.hpp"
 #include <chrono>
 #include <limits.h>
+#include "common.hpp"
+#include "DpdkContext.hpp"
 
-
-#define Q(x) #x
-#define QUOTE(x) Q(x)
-
-#define MESSAGE_SIZE 500
-#define KEY_SIZE 100
-//10000, 20000, 163840
-#define BATCH_SIZE 16384
 #define RD_MAX_BUFFERED_MESSAGES 100000
 #define RD_MAX_BUFFERED_MS 100
 
@@ -29,7 +23,7 @@
 
 
 static volatile sig_atomic_t run = 1;
-static auto start_time = std::chrono::high_resolution_clock::now();
+static mtime global_start_time;
 
 /**
  * @brief Signal termination of program
@@ -39,19 +33,6 @@ static void stop(int sig) {
         fclose(stdin); /* abort fgets() */
 }
 
-inline void print_stat(const char* action, unsigned long num){
-        if ((num % BATCH_SIZE*2)>0){
-                return;
-        }
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed = end_time - start_time;
-        long time_spent = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-        double message_rate=((double)num)/((double)time_spent);
-        double bytes_rate=message_rate*MESSAGE_SIZE/1000000;
-
-        fprintf(stderr, "%% %s %lu messages, within %ld sec. msg/s %f mb/s %f\n",
-                        action, num, time_spent, message_rate, bytes_rate);
-}
 
 
 
@@ -68,38 +49,31 @@ inline void print_stat(const char* action, unsigned long num){
  */
 static void
 dr_msg_cb(rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque) {
-        static unsigned long delivered=0;
-        static unsigned long last_key=0;
-        static unsigned long got_non_bigger=0;
-        static unsigned long errors=0;
+        static stats_t stats ={0};
+
         if (rkmessage->err){
                 fprintf(stderr, "%% Message delivery failed: %s\n",
                         rd_kafka_err2str(rkmessage->err));
-                errors++;
+                stats.kafka_errors++;
         } else {
-                delivered++;
-                unsigned long key = *((long*)rkmessage->key);
-                if (! (key>last_key) ){
-                       got_non_bigger++; 
-                }
-                last_key=key;
-                print_stat("DELIVERED", delivered);
-                // if (key%(BATCH_SIZE*10) ==0){
-                        // fprintf(stderr,
-                        //   "%% Last delivered message (%zd bytes, partition %d, key %lu. totals: deliverd=%lu, errors=%u\n",
-                        //   rkmessage->len, rkmessage->partition,key, delivered, errors);
-                // }
-
+                stats.delivered++;
+                stats.delivered_bytes+=rkmessage->len;
         }
+        stats.processed++;
+        stats.processed_bytes+=rkmessage->len;
 
-        mempool<MESSAGE_SIZE,KEY_SIZE>* pool = (mempool<MESSAGE_SIZE,KEY_SIZE>*)opaque;
-        struct mempool_element<MESSAGE_SIZE,KEY_SIZE>* mbuffer = (struct mempool_element<MESSAGE_SIZE,KEY_SIZE>*)rkmessage->_private;
+        
+        print_stat(global_start_time, "DELIVERED", stats);
+
+
+        mempool_s *pool = (mempool_s*)opaque;
+        mempool_element_s * mbuffer = (mempool_element_s*)rkmessage->_private;
         assert(pool!=NULL);
         assert(mbuffer!=NULL);
         pool->put(mbuffer);
 }
 
-void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE,KEY_SIZE>* pool, rd_kafka_message_t *batch, unsigned long &key, size_t accepted){
+void prepare_batch(rd_kafka_t *rk, rte_ring *ring, stats_s &stats, rd_kafka_message_t *batch, size_t accepted){
         if (accepted ==0){
                 return;
         }
@@ -113,26 +87,24 @@ void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE,KEY_SIZE>* pool, rd_kafk
         }
 
         for (int i=BATCH_SIZE-accepted;i<BATCH_SIZE;i++){
-                struct mempool_element<MESSAGE_SIZE,KEY_SIZE>* mbuffer = NULL;
-                while(true) {
-                        mbuffer=pool->get();
-                        if (mbuffer){
-                                break;
-                        } else {
-                                rd_kafka_poll(rk, 0);
-                        }
+                mempool_element_s *mbuffer = NULL;
+                rte_ring_dequeue(ring, (void**)&mbuffer);
+                while(mbuffer==NULL) {
+                        stats.ring_errors++;
+                        rte_ring_dequeue(ring, (void**)&mbuffer);
+                        rd_kafka_poll(rk, 0);       
                 }
+                
 
-                print_stat("SENT", key);
+                print_stat(global_start_time, "KAFKA", stats);
 
-                void* buff = mbuffer->buffer;
-                long* k= (long*)buff;
-                *k=++key;
-                batch[i].payload=buff;
-                batch[i].len=MESSAGE_SIZE;
-                batch[i].key=k;
-                batch[i].key_len=sizeof(long);
-                batch[i]._private=mbuffer;                    
+                batch[i].payload=mbuffer->buffer;
+                batch[i].len=mbuffer->buffer_len;
+                batch[i].key=mbuffer->key;
+                batch[i].key_len=mbuffer->key_len;
+                batch[i]._private=mbuffer;        
+                stats.processed++;
+                stats.processed_bytes+=mbuffer->buffer_len;    
         }
         rd_kafka_poll(rk, 0);
 
@@ -165,7 +137,16 @@ int main(int argc, char **argv) {
         topic_num   = strtol(argv[3], NULL,10);
         limit   = (argc == 5) ? strtoul (argv[4], NULL,10) : ULONG_MAX;
 
-        mempool<MESSAGE_SIZE,KEY_SIZE>* pool= new mempool<MESSAGE_SIZE,KEY_SIZE>(topic_num*BATCH_SIZE);
+        dpdk_settings_t settings=default_dpdk_settings;
+        settings.cores={1};
+        settings.primary=false;
+        auto c = DpdkContext::instance(settings);
+
+        mempool_s *pool=NULL;
+        stats_s stats;
+        rte_ring *ring=NULL;
+
+        app_init(&pool, stats, &ring, c.dpdk_settings.primary);
 
         /*
          * Create Kafka client configuration place-holder
@@ -245,13 +226,13 @@ int main(int argc, char **argv) {
         
         rd_kafka_message_t buffers[topic_num][BATCH_SIZE];
         
-        start_time = std::chrono::high_resolution_clock::now();
-
+        mtime start_time = std::chrono::high_resolution_clock::now();
+        global_start_time=start_time;
 
         while (run && key<limit) {
 
                 for (int i=0;i<topic_num;i++){
-                        prepare_batch(rk, pool, buffers[i],key, accepted_messages[i]);
+                        prepare_batch(rk, ring, stats, buffers[i], accepted_messages[i]);
                 }
 
                 for (int i=0;i<topic_num;i++){
@@ -271,13 +252,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%% Flushing final messages..\n");
         rd_kafka_flush(rk, 10 * 1000 /* wait for max 10 seconds */);
         
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto elapsed = end_time - start_time;
-        long time_spent = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
-        fprintf(stderr, "%% Sent %lu messages, within %ld sec. msg/sec %f\n",
-                        key, time_spent, ((double)key)/((double)time_spent));
-        
-
+        print_stat(start_time, "KAFKA", stats);
 
         /* If the output queue is still not empty there is an issue
          * with producing messages to the clusters. */
@@ -291,7 +266,7 @@ int main(int argc, char **argv) {
         delete ktarr;
         /* Destroy the producer instance */
         rd_kafka_destroy(rk);
-        delete pool;
+        app_free(&pool, c.dpdk_settings.primary);
         return 0;
 }
 

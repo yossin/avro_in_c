@@ -2,6 +2,7 @@
 
 #include "mymempool.hpp"
 #include <unistd.h>
+#include "rte_ring.h"
 
 #define Q(x) #x
 #define QUOTE(x) Q(x)
@@ -20,6 +21,7 @@ typedef struct stats_t{
         unsigned long delivered_bytes;
         unsigned long ring_errors;
         unsigned long pool_errors;
+        unsigned long kafka_errors;
 } stats_s;
 
 typedef struct mempool<MESSAGE_SIZE,KEY_SIZE> mempool_s;
