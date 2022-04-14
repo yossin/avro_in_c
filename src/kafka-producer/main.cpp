@@ -40,7 +40,7 @@ static void stop(int sig) {
 }
 
 inline void print_stat(const char* action, unsigned long num){
-        if (num % BATCH_SIZE*2){
+        if ((num % BATCH_SIZE*2)>0){
                 return;
         }
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -99,7 +99,7 @@ dr_msg_cb(rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque) {
         pool->put(mbuffer);
 }
 
-void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE,KEY_SIZE>* pool, rd_kafka_message_t *batch, long &key, size_t accepted){
+void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE,KEY_SIZE>* pool, rd_kafka_message_t *batch, unsigned long &key, size_t accepted){
         if (accepted ==0){
                 return;
         }
@@ -144,11 +144,11 @@ int main(int argc, char **argv) {
         rd_kafka_t *rk;        /* Producer instance handle */
         rd_kafka_conf_t *conf; /* Temporary configuration object */
         char errstr[512];      /* librdkafka API error reporting buffer */
-        char buf[512];         /* Message value temporary buffer */
+        //char buf[512];         /* Message value temporary buffer */
         const char *brokers;   /* Argument: broker list */
         const char *topic_prefix;     /* Argument: topic to produce to */
         int topic_num;     /* Argument: topic to produce to */
-        long key=0;
+        unsigned long key=0;
         unsigned long limit=0;
 
 

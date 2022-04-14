@@ -10,5 +10,5 @@ kafka_dep = meson.get_compiler('cpp').find_library('rdkafka', required : true)
 
 executable('kafka-producer', 
   sources : ['main.cpp'],
-  dependencies : [ utils_dep, kafka_dep])
+  dependencies : [ common_dep, kafka_dep])
 

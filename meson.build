@@ -8,7 +8,7 @@ dpdk = subproject('dpdk')
 dpdk_dep = dpdk.get_variable('dpdk_libraries')
 
 
-subdir('src/utils')
+subdir('src/common')
 subdir('src/avro-person')
 subdir('src/kafka-producer')
 
