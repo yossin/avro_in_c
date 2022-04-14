@@ -5,7 +5,21 @@
     "version": "0.2.0",
     "configurations": [
       
-
+      {
+        "name": "avropersom",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/build/src/avro-person/avro-person",
+        "args": ["1"],
+        "stopAtEntry": true,
+        "cwd": "${workspaceFolder}",
+        "environment": [],
+        "externalConsole": false,
+        "launchCompleteCommand": "exec-run",
+        "linux": {
+          "MIMode": "gdb",
+          "miDebuggerPath": "/usr/bin/gdb"
+        },},
         {
             "name": "rdkafka",
             "type": "cppdbg",

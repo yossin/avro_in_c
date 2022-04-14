@@ -15,6 +15,7 @@
 #define QUOTE(x) Q(x)
 
 #define MESSAGE_SIZE 500
+#define KEY_SIZE 100
 //10000, 20000, 163840
 #define BATCH_SIZE 16384
 #define RD_MAX_BUFFERED_MESSAGES 100000
@@ -91,14 +92,14 @@ dr_msg_cb(rd_kafka_t *rk, const rd_kafka_message_t *rkmessage, void *opaque) {
 
         }
 
-        mempool<MESSAGE_SIZE>* pool = (mempool<MESSAGE_SIZE>*)opaque;
-        struct mempool_buff<MESSAGE_SIZE>* mbuffer = (struct mempool_buff<MESSAGE_SIZE>*)rkmessage->_private;
+        mempool<MESSAGE_SIZE,KEY_SIZE>* pool = (mempool<MESSAGE_SIZE,KEY_SIZE>*)opaque;
+        struct mempool_element<MESSAGE_SIZE,KEY_SIZE>* mbuffer = (struct mempool_element<MESSAGE_SIZE,KEY_SIZE>*)rkmessage->_private;
         assert(pool!=NULL);
         assert(mbuffer!=NULL);
         pool->put(mbuffer);
 }
 
-void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE>* pool, rd_kafka_message_t *batch, long &key, size_t accepted){
+void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE,KEY_SIZE>* pool, rd_kafka_message_t *batch, long &key, size_t accepted){
         if (accepted ==0){
                 return;
         }
@@ -112,7 +113,7 @@ void prepare_batch(rd_kafka_t *rk, mempool<MESSAGE_SIZE>* pool, rd_kafka_message
         }
 
         for (int i=BATCH_SIZE-accepted;i<BATCH_SIZE;i++){
-                struct mempool_buff<MESSAGE_SIZE>* mbuffer = NULL;
+                struct mempool_element<MESSAGE_SIZE,KEY_SIZE>* mbuffer = NULL;
                 while(true) {
                         mbuffer=pool->get();
                         if (mbuffer){
@@ -164,7 +165,7 @@ int main(int argc, char **argv) {
         topic_num   = strtol(argv[3], NULL,10);
         limit   = (argc == 5) ? strtoul (argv[4], NULL,10) : ULONG_MAX;
 
-        mempool<MESSAGE_SIZE>* pool= new mempool<MESSAGE_SIZE>(topic_num*BATCH_SIZE);
+        mempool<MESSAGE_SIZE,KEY_SIZE>* pool= new mempool<MESSAGE_SIZE,KEY_SIZE>(topic_num*BATCH_SIZE);
 
         /*
          * Create Kafka client configuration place-holder

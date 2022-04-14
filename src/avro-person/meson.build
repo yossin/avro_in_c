@@ -10,5 +10,6 @@ avro_dep = meson.get_compiler('cpp').find_library('avro', required : true)
 
 executable('avro-person', 
   sources : ['main.cpp'],
-  dependencies : [ avro_dep, utils_dep, dpdk_dep])
+  dependencies : [ avro_dep, utils_dep])#,
+  #link_with:dpdk_libraries
 
