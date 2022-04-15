@@ -30,38 +30,33 @@ dpdk_settings_t default_dpdk_settings = {.cores={1,2}, .channels=4, .socket_mem=
 class DpdkContext final {
     private:
         char **argv;
-        int argc;
+        int argc=0;
         DpdkContext(dpdk_settings_t settings):dpdk_settings(settings) { 
             std::stringstream core_stream;
             for (int c: settings.cores){
                 core_stream <<  "," << c;
             }
-            argc=settings.use_hugepages?10:9;
-            argv = new char*[argc];
-            for (int i=0; i<argc; i++){
+            argv = new char*[15];
+            for (int i=0; i<15; i++){
                 argv[i] = new char[500];
             }
-            strcpy(argv[0], "-l");
-            strcpy(argv[1], &core_stream.str().c_str()[1]);
-            strcpy(argv[2], "-n");
-            strcpy(argv[3], std::to_string(settings.channels).c_str());
+            strcpy(argv[argc++], "-l");
+            strcpy(argv[argc++], &core_stream.str().c_str()[1]);
+            strcpy(argv[argc++], "-n");
+            strcpy(argv[argc++], std::to_string(settings.channels).c_str());
             
             if (!settings.use_hugepages){
-                strcpy(argv[4], "--no-huge");
-                strcpy(argv[5], "--proc-type");
-                strcpy(argv[6], settings.primary?"primary":"secondary");
-                strcpy(argv[7], "--base-virtaddr");
-                strcpy(argv[8], "0x100000000");
-
+                strcpy(argv[argc++], "--no-huge");
             } else {
-                strcpy(argv[4], "--socket-mem");
-                strcpy(argv[5], std::to_string(settings.socket_mem).c_str());
-                strcpy(argv[6], "--proc-type");
-                strcpy(argv[7], settings.primary?"primary":"secondary");
-                strcpy(argv[8], "--base-virtaddr");
-                strcpy(argv[9], "0x100000000");
+                strcpy(argv[argc++], "--socket-mem");
+                strcpy(argv[argc++], std::to_string(settings.socket_mem).c_str());
             }
-        
+            strcpy(argv[argc++], "--proc-type");
+            strcpy(argv[argc++], settings.primary?"primary":"secondary");
+            strcpy(argv[argc++], "--base-virtaddr");
+            strcpy(argv[argc++], "0x100000000");
+            strcpy(argv[argc++], "--legacy-mem");
+
 
 
             std::cout << "initialize dpdk EAL";
