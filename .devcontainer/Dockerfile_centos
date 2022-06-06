@@ -1,0 +1,53 @@
+FROM centos:7 
+
+RUN yum update -y
+RUN yum groupinstall 'Development Tools' -y
+RUN yum install -y centos-release-scl
+RUN yum install -y devtoolset-11
+
+RUN yum -y install epel-release && yum -y update epel-release
+RUN yum -y install wget ninja-build meson cmake3 
+RUN ln -s  /usr/bin/cmake3 /usr/bin/cmake && \
+    ln -s  /usr/bin/ctest3 /usr/bin/ctest && \
+    ln -s  /usr/bin/cpack3 /usr/bin/cpack && \
+    ln -s  /usr/bin/ccmake3 /usr/bin/ccmake 
+
+RUN yum -y install zlib-devel snappy snappy-devel 
+
+
+RUN echo "source /opt/rh/devtoolset-11/enable" >> /etc/bashrc
+SHELL ["/bin/bash", "--login", "-c"]
+
+
+RUN wget https://github.com/akheron/jansson/releases/download/v2.14/jansson-2.14.tar.gz -O /tmp/jansson-2.14.tar.gz && \
+    tar -xvf /tmp/jansson-2.14.tar.gz -C /tmp && \
+    cd /tmp/jansson-2.14 && \
+    ./configure --prefix=/usr && \
+    make install
+# patch jansson pkg-config
+RUN cp /tmp/jansson-2.14/jansson.pc /usr/lib64/pkgconfig/
+
+RUN wget https://archive.apache.org/dist/avro/avro-1.10.2/c/avro-c-1.10.2.tar.gz -O /tmp/avro-c-1.10.2.tar.gz && \
+    tar -xvf /tmp/avro-c-1.10.2.tar.gz -C /tmp && \
+    cd /tmp/avro-c-1.10.2 && \
+    mkdir build && \
+    cd build &&\
+    cmake --DCMAKE_INSTALL_PREFIX=/usr ../ && \
+    make install
+
+RUN wget https://github.com/google/googletest/archive/refs/tags/release-1.11.0.tar.gz -O /tmp/release-1.11.0.tar.gz && \
+    tar -xvf /tmp/release-1.11.0.tar.gz -C /tmp && \
+    cd /tmp/googletest-release-1.11.0/ && \
+    mkdir build && \
+    cd build &&\
+    cmake --DCMAKE_INSTALL_PREFIX=/usr ../ && \
+    make install
+
+RUN wget https://github.com/edenhill/librdkafka/archive/refs/tags/v1.8.2.tar.gz -O /tmp/librdkafkarelease-1.8.2.tar.gz && \
+    tar -xvf /tmp/librdkafkarelease-1.8.2.tar.gz -C /tmp && \
+    cd /tmp/librdkafka-1.8.2/ && \
+    mkdir build && \
+    cd build &&\
+    cmake --DCMAKE_INSTALL_PREFIX=/usr ../ && \
+    make install
+
